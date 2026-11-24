@@ -32,6 +32,7 @@ It has two halves, switched at the top of the page: **Lab** and **Director**. Th
 | --- | --- |
 | **Overview** | Overdue chores, what is due soon, IRB and grant dates, the cash box |
 | **Lab** | Members and their roles, funding and projects |
+| **Studies** | Every folder on the lab's SCC project spaces: what it is, subjects, last activity, and whether stimulus code and the rest of what a reanalysis needs are on file. Imported from `studies.json` (private LingLab repo), so no lab data lives in this page |
 | **Grants** | Awards, periods, next report due |
 | **Compliance** | IRB protocols, status, expiry |
 | **Admin** | Lab chores, plus the subject payment cash box |
@@ -69,7 +70,7 @@ The Apps Script keeps one "Store" sheet with the columns Collection, Id, Updated
 
 - Live collections, loaded on every visit: `students`, `tasks`, `notes`, `config`
 - Archive collections, loaded only when an archive view is opened: `history`, `records`, `alumni`, `funding`
-- Lab rows live in `history` under `kind` of `lab`, `recipe` or `cash`, all tagged `branch: "lab"`
+- Lab rows live in `history` under `kind` of `lab`, `recipe` or `cash`, all tagged `branch: "lab"`; the Studies catalogue is `kind: "lab"`, `type: "study"`
 
 Backend actions: `load`, `put`, `del`, `bulk`, `report`, `reviews`, `archive`.
 

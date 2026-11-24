@@ -519,7 +519,7 @@ function loadAll(first) {
 var BRANCHES = [["lab", "Lab"], ["dir", "Director"]];
 var TABSETS = {
   dir: [["overview", "Overview"], ["people", "People"], ["reviews", "Annual Report"], ["funding", "Funding"], ["program", "Program"], ["tools", "Tools"]],
-  lab: [["lhome", "Overview"], ["lpeople", "Lab"], ["lgrants", "Grants"], ["lirb", "Compliance"], ["ladmin", "Admin"], ["lsheets", "Sheets"], ["lrecipes", "Shortcuts"]]
+  lab: [["lhome", "Overview"], ["lpeople", "Lab"], ["lstudies", "Studies"], ["lgrants", "Grants"], ["lirb", "Compliance"], ["ladmin", "Admin"], ["lsheets", "Sheets"], ["lrecipes", "Shortcuts"]]
 };
 function branch() { return UI.branch === "lab" ? "lab" : "dir"; }
 function TABSET() { return TABSETS[branch()]; }
@@ -542,7 +542,7 @@ function setBranch(b) {
   render();
 }
 var VIEWS = {overview: vHome, reviews: vReviews, funding: vFunding, people: vPeople, program: vProgram, tools: vTools,
-  lhome: vLabHome, lpeople: vLabPeople, lgrants: vGrants, lirb: vCompliance, ladmin: vAdmin, lrecipes: vRecipes,
+  lhome: vLabHome, lpeople: vLabPeople, lstudies: vStudies, lgrants: vGrants, lirb: vCompliance, ladmin: vAdmin, lrecipes: vRecipes,
   lsheets: function () { return vSheets("lab"); }};
 
 /* Roving-tabindex keyboard navigation shared by the main tabs and every subtab row. */
@@ -1299,6 +1299,152 @@ function recipeEdit(r) {
       h("button", {class: "btn primary", text: "Save", onclick: function () { if (!r.id) r.id = "recipe-" + uid(); saveLab(r).then(function () { close(); }); }}),
       isNew ? "" : h("button", {class: "btn", text: "Remove", onclick: function () { delLab(r); close(); }})));
   });
+}
+
+/* ---------- studies: what is sitting on the cluster ----------
+   One row per folder in the lab's SCC project spaces. The rows are generated outside the
+   dashboard (LingLab repo, scc-inventory/) and brought in with "Import catalogue", so the
+   page itself still carries no lab data. Only the notes field is written here. */
+var STUDY_LEVEL = {ready: ["Everything on file", "ok"], mostly: ["Analyzable, with gaps", "warn"], partial: ["Incomplete", "bad"],
+  no: ["Not usable as is", "bad"], derived: ["Derived analysis", "idle"]};
+var STUDY_STIM = {yes: ["On file", "ok"], no: ["Not found", "bad"], unknown: ["Unknown", "warn"]};
+function studyBadge(map, k) { return map[k] ? badge(map[k][0], map[k][1]) : h("span", {class: "muted small", text: "—"}); }
+function studyIsWork(s) { return s.role === "study" || s.role === "analysis"; }
+function vStudies() {
+  var root = h("div", {});
+  if (!archiveGuard(root)) return root;
+  var all = labRows("study");
+  var pick = h("input", {type: "file", accept: ".json,application/json", style: "display:none", onchange: function (e) { if (e.target.files[0]) studiesImport(e.target.files[0]); e.target.value = ""; }});
+  var bar = h("div", {class: "toolbar"});
+  root.appendChild(bar);
+  if (!all.length) {
+    bar.appendChild(h("span", {class: "grow"})); bar.appendChild(pick);
+    bar.appendChild(h("button", {class: "btn primary", text: "Import catalogue", onclick: function () { pick.click(); }}));
+    root.appendChild(h("div", {class: "card empty", text: "No catalogue loaded yet. Import studies.json from the LingLab repository (scc-inventory/) and every folder on the cluster shows up here."}));
+    return root;
+  }
+  UI.stScope = UI.stScope || "work"; UI.stCat = UI.stCat || "all"; UI.stQ = UI.stQ || "";
+  var scoped = UI.stScope === "all" ? all : all.filter(studyIsWork);
+  var work = all.filter(studyIsWork), real = all.filter(function (s) { return s.role === "study"; });
+  var yearAgo = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+  function count(list, f) { return list.filter(f).length; }
+  root.insertBefore(h("div", {class: "grid g4", style: "margin-bottom:14px"},
+    h("div", {class: "card stat", text: String(real.length)}, h("small", {text: "Studies on the cluster"})),
+    h("div", {class: "card stat", text: String(count(work, function (s) { return (s.touched || "") >= yearAgo; }))}, h("small", {text: "Touched in the last year"})),
+    h("div", {class: "card stat" + (count(real, function (s) { return s.stimulus === "yes"; }) < real.length / 2 ? " bad" : ""),
+      text: count(real, function (s) { return s.stimulus === "yes"; }) + " of " + real.length}, h("small", {text: "Have stimulus code on file"})),
+    h("div", {class: "card stat", text: String(count(real, function (s) { return s.reanalysis === "ready"; }))}, h("small", {text: "Have everything for a reanalysis"}))), bar);
+  var q = h("input", {type: "search", placeholder: "Search folders and descriptions", value: UI.stQ, "aria-label": "Search studies", style: "min-width:240px",
+    oninput: function (e) { UI.stQ = e.target.value; paint(); }});
+  var scope = h("select", {"aria-label": "Which folders", onchange: function (e) { UI.stScope = e.target.value; UI.stCat = "all"; render(); }},
+    [["work", "Studies and analyses (" + work.length + ")"], ["all", "Every folder (" + all.length + ")"]].map(function (o) { return h("option", {value: o[0], text: o[1], selected: UI.stScope === o[0]}); }));
+  bar.appendChild(q); bar.appendChild(scope); bar.appendChild(h("span", {class: "grow"})); bar.appendChild(pick);
+  bar.appendChild(h("button", {class: "btn", text: "Update catalogue", title: "Import a newer studies.json. Your notes are kept.", onclick: function () { pick.click(); }}));
+  var cats = [], seen = {};
+  scoped.forEach(function (s) { if (!seen[s.cat]) { seen[s.cat] = 0; cats.push(s.cat); } seen[s.cat]++; });
+  if (UI.stCat !== "all" && !seen[UI.stCat]) UI.stCat = "all";
+  root.appendChild(subtabs("Category", [["all", "All (" + scoped.length + ")"]].concat(cats.map(function (c) { return [c, c + " (" + seen[c] + ")"]; })),
+    UI.stCat, function (v) { UI.stCat = v; render(); }));
+  var tb = h("tbody", {}), note = h("p", {class: "small muted", style: "margin-top:8px"});
+  function paint() {
+    var needle = UI.stQ.trim().toLowerCase();
+    var rows = scoped.filter(function (s) {
+      if (UI.stCat !== "all" && s.cat !== UI.stCat) return false;
+      return !needle || [s.folder, s.title, s.about, s.contains, s.cat, s.touchedBy, s.owner, s.notes].join(" ").toLowerCase().indexOf(needle) >= 0;
+    }).sort(function (a, b) { return (b.touched || "").localeCompare(a.touched || ""); });
+    tb.textContent = "";
+    rows.forEach(function (s) {
+      tb.appendChild(h("tr", {class: studyIsWork(s) ? "" : "past"},
+        h("td", {}, h("button", {class: "link", text: s.folder, onclick: function () { studyDlg(s); }}), h("div", {class: "small muted", text: s.title || ""})),
+        h("td", {class: "small", text: s.cat || "—"}),
+        h("td", {class: "small", text: s.subjects ? String(s.subjects) : "—"}),
+        h("td", {class: "small", text: s.touched || "—"}),
+        h("td", {class: "small", text: s.touchedBy || "—"}),
+        h("td", {}, studyBadge(STUDY_STIM, s.stimulus)),
+        h("td", {}, studyBadge(STUDY_LEVEL, s.reanalysis))));
+    });
+    var when = (all[0] && all[0].scanned) || "";
+    note.textContent = rows.length + " of " + all.length + " folders" + (when ? " · cluster read on " + when : "") + " · newest activity first; click a column to sort, a folder for the details";
+  }
+  paint();
+  root.appendChild(h("div", {class: "tw"}, h("table", {}, h("thead", {}, h("tr", {},
+    ["Folder", "Category", "Subjects", "Last touched", "By", "Stimulus code", "Reanalysis"].map(function (x) { return h("th", {text: x}); }))), tb)));
+  root.appendChild(note);
+  return root;
+}
+function studyDlg(s) {
+  dialog(function (el, close) {
+    el.appendChild(h("div", {class: "row sp"}, h("h2", {text: s.folder}), h("button", {class: "btn", text: "Close", onclick: close})));
+    el.appendChild(h("p", {style: "margin:2px 0 8px", text: s.title || ""}));
+    el.appendChild(h("div", {class: "row", style: "margin-bottom:6px"}, h("code", {class: "small", text: s.path}),
+      h("button", {class: "link small", text: "Copy path", onclick: function () { copy(s.path, "Path copied"); }}),
+      h("span", {class: "badge b-idle", text: s.cat})));
+    function qa(q, a) { if (a) el.appendChild(h("div", {class: "qa"}, h("div", {class: "q", text: q}), h("div", {class: "a", text: a}))); }
+    qa("What the project is about", s.about);
+    qa("What the folder contains", s.contains);
+    qa("Worth knowing", s.caveat);
+    var sub = h("div", {class: "sec"}, h("h3", {text: "Subjects"}));
+    if (!s.subjects) sub.appendChild(h("p", {class: "small muted", text: "No subject folders found here."}));
+    else {
+      sub.appendChild(h("p", {text: s.subjects + (s.subjects === 1 ? " subject" : " subjects") + ((s.groups || []).length > 1 ? " across " + s.groups.length + " sets" : "")}));
+      (s.groups || []).forEach(function (g) {
+        sub.appendChild(h("p", {class: "small", text: g.where + ": " + g.subjects + (g.subjects === 1 ? " subject" : " subjects") + " in " + g.folders + (g.folders === 1 ? " folder" : " folders") +
+          ", " + g.sessions + (g.sessions === 1 ? " session" : " sessions") + " · raw scans for " + g.raw + ", processed data for " + g.func}));
+      });
+      if ((s.subjectIds || []).length) sub.appendChild(h("p", {class: "small muted", text: "Lab subject numbers: " + s.subjectIds.join(", ")}));
+    }
+    el.appendChild(sub);
+    var act = h("div", {class: "sec"}, h("h3", {text: "Activity"}));
+    act.appendChild(h("p", {text: s.touched ? "Last touched " + fmtDate(s.touched) + " by " + (s.touchedBy || "someone unknown") : "No readable activity."}));
+    if ((s.touches || []).length > 1) act.appendChild(h("p", {class: "small", text: "Before that: " + s.touches.slice(1).map(function (t) { return t.who + " (" + fmtDate(t.date) + ")"; }).join(", ")}));
+    act.appendChild(h("p", {class: "small muted", text: "Folder owner: " + (s.owner || "unknown") + (s.started ? " · oldest file " + fmtDate(s.started) : "") + " · " + (s.files || 0).toLocaleString() + " files"}));
+    el.appendChild(act);
+    var re = h("div", {class: "sec"}, h("h3", {text: "Can it be reanalyzed?"}));
+    if (!STUDY_LEVEL[s.reanalysis]) re.appendChild(h("p", {class: "small muted", text: "Not a dataset, so the question does not apply."}));
+    else {
+      re.appendChild(h("p", {}, studyBadge(STUDY_LEVEL, s.reanalysis), " ",
+        h("span", {class: "small", text: s.reanalysis === "derived" ? "Built from other folders' data; it stands or falls with them."
+          : (s.missing || []).length ? "Missing or not found: " + s.missing.join(", ") + "." : "Nothing on the checklist is missing."})));
+      (s.check || []).forEach(function (c) {
+        re.appendChild(h("div", {class: "row", style: "align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--line)"},
+          h("span", {class: "badge " + (c.ok ? "b-ok" : "b-bad"), text: c.ok ? "Yes" : "No"}),
+          h("div", {style: "flex:1;min-width:0"}, h("div", {text: c.item}), h("div", {class: "small muted", style: "overflow-wrap:anywhere", text: c.detail || ""}))));
+      });
+      if (s.unreadable) re.appendChild(h("p", {class: "small muted", style: "margin-top:8px", text: s.unreadable + " subfolder" + (s.unreadable === 1 ? " is" : "s are") + " not readable from the PI account, so the counts here are a floor."}));
+      re.appendChild(h("p", {class: "small muted", style: "margin-top:8px", text: "Stimulus code means a script in this folder that opens a display window. Code kept on a testing-room machine or in a personal repository would not show up."}));
+    }
+    el.appendChild(re);
+    el.appendChild(h("div", {class: "sec"}, h("h3", {text: "Your notes"}),
+      h("textarea", {style: "width:100%;min-height:80px", value: s.notes || "", placeholder: "Where the stimulus code lives, who to ask, what happened to the project…",
+        onchange: function (e) { s.notes = e.target.value; saveLab(s); }})));
+  });
+}
+function studiesImport(file) {
+  var fr = new FileReader();
+  fr.onload = function () {
+    var d; try { d = JSON.parse(fr.result); } catch (e) { setSync("That file is not valid JSON.", true); return; }
+    var list = (d && d.studies) || [];
+    if (!list.length || list.some(function (o) { return !o.id || o.type !== "study" || !o.folder; })) { setSync("That does not look like a studies catalogue.", true); return; }
+    var old = {}; labRows("study").forEach(function (o) { old[o.id] = o; });
+    var ids = {}; list.forEach(function (o) { ids[o.id] = 1; o.kind = "lab"; o.branch = "lab"; if (old[o.id] && old[o.id].notes) o.notes = old[o.id].notes; });
+    var stale = Object.keys(old).filter(function (id) { return !ids[id]; });
+    if (!confirm("Import " + list.length + " folders" + (stale.length ? " and remove " + stale.length + " that are no longer in the catalogue" : "") + "? Your notes are kept.")) return;
+    stale.forEach(function (id) { delLab(old[id]); });
+    var done = 0, failed = 0, i = 0;
+    function next() {
+      if (i >= list.length) return Promise.resolve();
+      var o = list[i++];
+      return call("put", {coll: "history", obj: o}).then(function (r) { if (!(r && r.ok)) failed++; }, function () { failed++; }).then(function () {
+        done++; setSync("Importing " + done + " of " + list.length + "…", false); return next();
+      });
+    }
+    S.archive.history = S.archive.history.filter(function (x) { return !ids[x.id]; }).concat(list);
+    setSync("Importing…", false);
+    Promise.all([next(), next(), next(), next()]).then(function () {
+      setSync(failed ? failed + " rows did not save. Import again to retry." : "Catalogue imported", !!failed); render();
+    });
+  };
+  fr.readAsText(file);
 }
 
 /* ================= END LAB BRANCH ================= */
@@ -2352,7 +2498,7 @@ function loadArchive() {
     hist.loading = false;
     if (r && r.ok) { S.archive = r.archive; prefsCache = {dir: null, lab: null}; } else hist.error = r && r.error === "unknown action" ? "The backend script needs the latest update." : "Could not load the archive.";
     setSync("", false); render();
-  }).catch(function () { hist.loading = false; hist.error = "Could not reach the server."; setSync("", false); if (["people", "program", "funding", "reviews", "tools", "lhome", "lpeople", "lgrants", "lirb", "ladmin", "lrecipes", "lsheets"].indexOf(UI.tab) >= 0) render(); });
+  }).catch(function () { hist.loading = false; hist.error = "Could not reach the server."; setSync("", false); if (["people", "program", "funding", "reviews", "tools", "lhome", "lpeople", "lstudies", "lgrants", "lirb", "ladmin", "lrecipes", "lsheets"].indexOf(UI.tab) >= 0) render(); });
 }
 function hSlug(x) { return String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
 function pctOf(o) { return o ? o.target + "% / " + o.acceptable + "% / " + o.needs + "%" : "—"; }
