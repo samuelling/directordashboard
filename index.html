@@ -1303,13 +1303,18 @@ function recipeEdit(r) {
 
 /* ---------- studies: what is sitting on the cluster ----------
    One row per folder in the lab's SCC project spaces. The rows are generated outside the
-   dashboard (LingLab repo, scc-inventory/) and brought in with "Import catalogue", so the
-   page itself still carries no lab data. Only the notes field is written here. */
+   dashboard (LingLab repo, scc-inventory/) and written to the store by a weekly job on the
+   lab's Mac mini, or by hand with "Import catalogue", so the page itself still carries no
+   lab data. That job replaces the rows wholesale, so your notes live in rows of their own
+   (type "studynote") which only this page writes. */
 var STUDY_LEVEL = {ready: ["Everything on file", "ok"], mostly: ["Analyzable, with gaps", "warn"], partial: ["Incomplete", "bad"],
   no: ["Not usable as is", "bad"], derived: ["Derived analysis", "idle"]};
 var STUDY_STIM = {yes: ["On file", "ok"], no: ["Not found", "bad"], unknown: ["Unknown", "warn"]};
 function studyBadge(map, k) { return map[k] ? badge(map[k][0], map[k][1]) : h("span", {class: "muted small", text: "—"}); }
 function studyIsWork(s) { return s.role === "study" || s.role === "analysis"; }
+function studyNoteRow(s) { return labRows("studynote").filter(function (n) { return n.id === "studynote-" + s.id; })[0]; }
+function studyNote(s) { var n = studyNoteRow(s); return n ? n.text || "" : s.notes || ""; }   /* s.notes: rows imported before notes moved out */
+function saveStudyNote(s, text) { saveLab({id: "studynote-" + s.id, kind: "lab", type: "studynote", branch: "lab", study: s.id, text: text}); }
 function vStudies() {
   var root = h("div", {});
   if (!archiveGuard(root)) return root;
@@ -1320,7 +1325,7 @@ function vStudies() {
   if (!all.length) {
     bar.appendChild(h("span", {class: "grow"})); bar.appendChild(pick);
     bar.appendChild(h("button", {class: "btn primary", text: "Import catalogue", onclick: function () { pick.click(); }}));
-    root.appendChild(h("div", {class: "card empty", text: "No catalogue loaded yet. Import studies.json from the LingLab repository (scc-inventory/) and every folder on the cluster shows up here."}));
+    root.appendChild(h("div", {class: "card empty", text: "No catalogue loaded yet. The lab's Mac mini loads it by itself once it has been given the dashboard key (scripts/dashboard-set-key.sh). To do it by hand, import studies.json from the LingLab repository (scc-inventory/)."}));
     return root;
   }
   UI.stScope = UI.stScope || "work"; UI.stCat = UI.stCat || "all"; UI.stQ = UI.stQ || "";
@@ -1339,7 +1344,7 @@ function vStudies() {
   var scope = h("select", {"aria-label": "Which folders", onchange: function (e) { UI.stScope = e.target.value; UI.stCat = "all"; render(); }},
     [["work", "Studies and analyses (" + work.length + ")"], ["all", "Every folder (" + all.length + ")"]].map(function (o) { return h("option", {value: o[0], text: o[1], selected: UI.stScope === o[0]}); }));
   bar.appendChild(q); bar.appendChild(scope); bar.appendChild(h("span", {class: "grow"})); bar.appendChild(pick);
-  bar.appendChild(h("button", {class: "btn", text: "Update catalogue", title: "Import a newer studies.json. Your notes are kept.", onclick: function () { pick.click(); }}));
+  bar.appendChild(h("button", {class: "btn", text: "Update by hand", title: "The catalogue refreshes itself every Monday. This imports a studies.json yourself. Your notes are kept.", onclick: function () { pick.click(); }}));
   var cats = [], seen = {};
   scoped.forEach(function (s) { if (!seen[s.cat]) { seen[s.cat] = 0; cats.push(s.cat); } seen[s.cat]++; });
   if (UI.stCat !== "all" && !seen[UI.stCat]) UI.stCat = "all";
@@ -1347,10 +1352,11 @@ function vStudies() {
     UI.stCat, function (v) { UI.stCat = v; render(); }));
   var tb = h("tbody", {}), note = h("p", {class: "small muted", style: "margin-top:8px"});
   function paint() {
-    var needle = UI.stQ.trim().toLowerCase();
+    var needle = UI.stQ.trim().toLowerCase(), notes = {};
+    if (needle) labRows("studynote").forEach(function (n) { notes[n.id] = n.text || ""; });
     var rows = scoped.filter(function (s) {
       if (UI.stCat !== "all" && s.cat !== UI.stCat) return false;
-      return !needle || [s.folder, s.title, s.about, s.contains, s.cat, s.touchedBy, s.owner, s.notes].join(" ").toLowerCase().indexOf(needle) >= 0;
+      return !needle || [s.folder, s.title, s.about, s.contains, s.cat, s.touchedBy, s.owner, notes["studynote-" + s.id] || s.notes].join(" ").toLowerCase().indexOf(needle) >= 0;
     }).sort(function (a, b) { return (b.touched || "").localeCompare(a.touched || ""); });
     tb.textContent = "";
     rows.forEach(function (s) {
@@ -1363,8 +1369,8 @@ function vStudies() {
         h("td", {}, studyBadge(STUDY_STIM, s.stimulus)),
         h("td", {}, studyBadge(STUDY_LEVEL, s.reanalysis))));
     });
-    var when = (all[0] && all[0].scanned) || "";
-    note.textContent = rows.length + " of " + all.length + " folders" + (when ? " · cluster read on " + when : "") + " · newest activity first; click a column to sort, a folder for the details";
+    var when = all.reduce(function (m, s) { return (s.scanned || "") > m ? s.scanned : m; }, "");
+    note.textContent = rows.length + " of " + all.length + " folders" + (when ? " · cluster read on " + when : "") + (labRows("studysync").length ? ", refreshed every Monday" : "") + " · newest activity first; click a column to sort, a folder for the details";
   }
   paint();
   root.appendChild(h("div", {class: "tw"}, h("table", {}, h("thead", {}, h("tr", {},
@@ -1415,8 +1421,8 @@ function studyDlg(s) {
     }
     el.appendChild(re);
     el.appendChild(h("div", {class: "sec"}, h("h3", {text: "Your notes"}),
-      h("textarea", {style: "width:100%;min-height:80px", value: s.notes || "", placeholder: "Where the stimulus code lives, who to ask, what happened to the project…",
-        onchange: function (e) { s.notes = e.target.value; saveLab(s); }})));
+      h("textarea", {style: "width:100%;min-height:80px", value: studyNote(s), placeholder: "Where the stimulus code lives, who to ask, what happened to the project…",
+        onchange: function (e) { saveStudyNote(s, e.target.value); }})));
   });
 }
 function studiesImport(file) {
